@@ -143,6 +143,10 @@ class Range:
     def __bool__(self):
         return self._bounds is not None
 
+    def __nonzero__(self):
+        # Python 2 compatibility
+        return type(self).__bool__(self)
+
     def __eq__(self, other):
         if not isinstance(other, Range):
             return False
@@ -363,54 +367,33 @@ class RangeCaster:
             schema = 'public'
 
         # get the type oid and attributes
-        curs.execute("""\
-select rngtypid, rngsubtype, typarray
+        try:
+            curs.execute("""\
+select rngtypid, rngsubtype,
+    (select typarray from pg_type where oid = rngtypid)
 from pg_range r
 join pg_type t on t.oid = rngtypid
 join pg_namespace ns on ns.oid = typnamespace
 where typname = %s and ns.nspname = %s;
 """, (tname, schema))
-        rec = curs.fetchone()
 
-        if not rec:
-            # The above algorithm doesn't work for customized seach_path
-            # (#1487) The implementation below works better, but, to guarantee
-            # backwards compatibility, use it only if the original one failed.
-            try:
-                savepoint = False
-                # Because we executed statements earlier, we are either INTRANS
-                # or we are IDLE only if the transaction is autocommit, in
-                # which case we don't need the savepoint anyway.
-                if conn.status == STATUS_IN_TRANSACTION:
-                    curs.execute("SAVEPOINT register_type")
-                    savepoint = True
+        except ProgrammingError:
+            if not conn.autocommit:
+                conn.rollback()
+            raise
+        else:
+            rec = curs.fetchone()
 
-                curs.execute("""\
-SELECT rngtypid, rngsubtype, typarray, typname, nspname
-from pg_range r
-join pg_type t on t.oid = rngtypid
-join pg_namespace ns on ns.oid = typnamespace
-WHERE t.oid = %s::regtype
-""", (name, ))
-            except ProgrammingError:
-                pass
-            else:
-                rec = curs.fetchone()
-                if rec:
-                    tname, schema = rec[3:]
-            finally:
-                if savepoint:
-                    curs.execute("ROLLBACK TO SAVEPOINT register_type")
-
-        # revert the status of the connection as before the command
-        if conn_status != STATUS_IN_TRANSACTION and not conn.autocommit:
-            conn.rollback()
+            # revert the status of the connection as before the command
+            if (conn_status != STATUS_IN_TRANSACTION
+            and not conn.autocommit):
+                conn.rollback()
 
         if not rec:
             raise ProgrammingError(
-                f"PostgreSQL range '{name}' not found")
+                f"PostgreSQL type '{name}' not found")
 
-        type, subtype, array = rec[:3]
+        type, subtype, array = rec
 
         return RangeCaster(name, pyrange,
             oid=type, subtype_oid=subtype, array_oid=array)
