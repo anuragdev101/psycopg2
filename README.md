@@ -10,3 +10,4 @@ Your-lambda-funcion --
    --psycopg2_binary.libs
    --lambda_function.py
 ``` 
+Don't forget to renmae '_psycopg.cpython-37m-x86_64-linux-gnu.so' in 'psycopg2' to '_psycopg.so' before using :)
